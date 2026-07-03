@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN" style="--time-zoom: 1;">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Digital Clock v2</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        /* 缩放锁定容器：整体缩放以抵消浏览器缩放 */
+        #zoom-wrapper {
+            /* 用 fixed + inset:0 铺满视觉视口，不受 zoom 影响 */
+            position: fixed;
+            inset: 0;
+            /* transform-origin 影响 absolute 子元素定位基准 */
+            transform-origin: top left;
+        }
+
+        #clock-container {
+            /* 用 absolute 强制铺满 wrapper，避免 100vw/100vh 在 zoom 下的布局跳变 */
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        #time-display {
+            font-size: var(--time-size, 100px);
+            font-weight: bold;
+            text-align: center;
+            letter-spacing: 2px;
+            text-shadow: 0 0 20px currentColor;
+            transition: color 0.3s, font-size 0s;
+        }
+
+        #ntp-status {
+            font-size: 14px;
+            margin-top: 10px;
+            opacity: 0.6;
+        }
+
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 8px;
+            flex-wrap: nowrap;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 6px 12px !important;
+            font-family: 'Courier New', monospace !important;
+            font-size: 13px !important;
+            font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            line-height: 1.2;
+        }
+
+        .btn-mode {
+            min-width: 52px !important;
+            max-width: 52px !important;
+        }
+
+        /* 顶部提示：相对于 zoom-wrapper 绝对定位 */
+        #hint {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 14px;
+            opacity: 0.4;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .btn-mode.active {
+            transform: scale(1.05);
+        }
+
+        .btn-settings {
+            margin-left: 10px;
+        }
+
+        .btn-refresh {
+            font-size: 18px !important;
+            min-width: 40px !important;
+            max-width: 40px !important;
+            background: rgba(100, 100, 100, 0.6) !important;
+            color: #fff !important;
+            border-radius: 50% !important;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(150, 150, 150, 0.8) !important;
+        }
+
+        /* Settings Panel */
+        #settings-wrapper {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+        }
+
+        #settings-panel {
+            width: 600px;
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        #settings-wrapper.show {
+            display: block;
+        }
+
+        /* Modal 内的按钮：锁设备像素，位置不随缩放变化 */
+        #settings-panel .btn {
+            padding: 8px 16px !important;
+            font-size: 14px !important;
+            min-width: 60px !important;
+            max-width: none !important;
+            flex: 1;
+        }
+
+        #settings-panel h3 {
+            color: #fff;
+            margin-bottom: 15px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .color-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+
+        .color-row label {
+            color: #fff;
+            width: 150px;
+            font-size: 13px;
+            flex-shrink: 0;
+            margin: 0;
+        }
+
+        .color-row input[type="text"] {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        .color-swatch {
+            width: var(--swatch-w, 40px);
+            height: var(--swatch-h, 30px);
+            border-radius: 4px;
+            border: 1px solid #444;
+            cursor: pointer;
+            position: relative;
+            flex-shrink: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        .color-swatch input[type="color"] {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+            border: none;
+            padding: 0;
+            margin: 0;
+            background: transparent;
+        }
+
+        .settings-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+
+        #overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 99;
+        }
+
+        #overlay.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="zoom-wrapper">
+    <div id="clock-container">
+        <div id="time-display">00:00:00:000</div>
+        <div id="ntp-status">正在校时...</div>
+    </div>
+
+    <div id="hint">ESC关闭设置 | L锁定 | 1/2/3切换制式 | C打开设置 | F全屏</div>
+</div>
+
+<!-- fixed 元素：放在 zoom-wrapper 外，不受 zoom 影响 -->
+<div id="zoom-hint" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px 40px;background:rgba(0,0,0,0.9);color:#ff6644;font-size:18px;border:2px solid #ff6644;border-radius:8px;z-index:9999;text-align:center;line-height:1.6;">⚠ 请按 Cmd+0 重置缩放</div>
+
+<div id="lock-status" style="display:none;position:fixed;top:10px;right:10px;padding:6px 12px;background:rgba(0,200,150,0.9);color:#000;font-size:13px;font-weight:bold;border-radius:4px;z-index:9998;">🔒 锁定</div>
+
+<div id="controls">
+    <button class="btn btn-mode" data-mode="0">ms</button>
+    <button class="btn btn-mode" data-mode="1">50f</button>
+    <button class="btn btn-mode" data-mode="2">25f</button>
+    <button class="btn btn-refresh" id="refresh-btn" title="重置缩放和锁定 (R)">R</button>
+    <button class="btn btn-settings" id="settings-btn">设置</button>
+</div>
+
+<div id="overlay"></div>
+
+<div id="zoom-detector" style="position:absolute;visibility:hidden;width:100px;height:100px;pointer-events:none;display:none;"></div>
+
+<div id="settings-wrapper">
+    <div id="settings-panel">
+    <h3>自定义颜色</h3>
+        <div class="color-row">
+            <label>背景颜色</label>
+            <input type="text" id="bg-color" value="#0d0d0d">
+            <label class="color-swatch" for="bg-picker" style="background:#0d0d0d">
+                <input type="color" id="bg-picker" value="#0d0d0d">
+            </label>
+        </div>
+        <div class="color-row">
+            <label>数字颜色</label>
+            <input type="text" id="fg-color" value="#00ffcc">
+            <label class="color-swatch" for="fg-picker" style="background:#00ffcc">
+                <input type="color" id="fg-picker" value="#00ffcc">
+            </label>
+        </div>
+        <div class="color-row">
+            <label>按钮背景</label>
+            <input type="text" id="btn-bg-color" value="#1a1f26">
+            <label class="color-swatch" for="btn-bg-picker" style="background:#1a1f26">
+                <input type="color" id="btn-bg-picker" value="#1a1f26">
+            </label>
+        </div>
+        <div class="color-row">
+            <label>按钮高亮</label>
+            <input type="text" id="btn-hl-color" value="#00ffcc">
+            <label class="color-swatch" for="btn-hl-picker" style="background:#00ffcc">
+                <input type="color" id="btn-hl-picker" value="#00ffcc">
+            </label>
+        </div>
+        <div class="color-row">
+            <label>按钮文字</label>
+            <input type="text" id="btn-txt-color" value="#5a7a8a">
+            <label class="color-swatch" for="btn-txt-picker" style="background:#5a7a8a">
+                <input type="color" id="btn-txt-picker" value="#5a7a8a">
+            </label>
+        </div>
+        <div class="settings-buttons">
+            <button class="btn" id="apply-btn" style="background:#00ffcc;color:#000;">应用</button>
+            <button class="btn" id="reset-btn" style="background:#666;color:#fff;">重置</button>
+            <button class="btn" id="close-btn" style="background:#444;color:#fff;">关闭</button>
+        </div>
+    </div>
+
+    <script>
+        // ========== 浏览器缩放补偿 ==========
+        // 所有计算从当前 dpr 出发，不依赖页面加载时的基准（避免非 100% 缩放刷新问题）
+        // 设备原生 DPR：MacBook Retina = 2，1x 显示器 = 1
+        // 按钮目标：200% 视觉 = 2 * deviceDPR / dpr
+        // 时间目标：锁定 100 设备像素 = 100 / dpr
+        const DEVICE_DPR = 2;  // MacBook Retina
+
+        // 缩放锁定（按 L 键切换）
+        let zoomLockEnabled = false;
+
+        // 刷新：重置 baseDpr 和缩放锁定，让页面回到 100%
+        function resetTo100() {
+            // 计算当前浏览器缩放比例（相对于标准 DPR，通常是 1 或 2）
+            const standardDpr = window.devicePixelRatio > 1.5 ? 2 : 1;
+            const currentZoom = window.devicePixelRatio / standardDpr;
+            console.log('resetTo100: devicePixelRatio =', window.devicePixelRatio, 'standardDpr =', standardDpr, 'currentZoom =', currentZoom);
+
+            // 强制视觉回到 100%：CSS zoom = 1 / 浏览器缩放
+            if (Math.abs(currentZoom - 1.0) > 0.01) {
+                const targetZoom = (1 / currentZoom).toFixed(4);
+                document.documentElement.style.zoom = targetZoom;
+                // 更新 baseDpr，使 L 键可以锁定在此 100% 状态
+                baseDpr = window.devicePixelRatio;
+                // R 键不锁定，只是重置到 100%
+                zoomLockEnabled = false;
+                // 显示提示（但不显示锁定图标）
+                const status = document.getElementById('lock-status');
+                if (status) {
+                    status.textContent = '100%';
+                    status.style.display = 'block';
+                    // 2 秒后隐藏提示（如果标签内容还是'100%'）
+                    setTimeout(() => {
+                        if (status.textContent === '100%') status.style.display = 'none';
+                    }, 2000);
+                }
+                console.log('resetTo100: set to 100% visual, zoom =', targetZoom, 'baseDpr =', baseDpr);
+            } else {
+                // 已经在 100%，清除 zoom
+                document.documentElement.style.zoom = '';
+                zoomLockEnabled = false;
+                const status = document.getElementById('lock-status');
+                if (status) {
+                    status.style.display = 'none';
+                }
+                console.log('resetTo100: already at 100%');
+            }
+        }
+
+        // 应用缩放锁定：CSS zoom 属性直接缩放整个文档
+        // macOS Chrome 上 visualViewport.scale 永远 = 1，改用 devicePixelRatio 检测
+        let baseDpr = window.devicePixelRatio;
+        function getBrowserZoom() {
+            const z = window.devicePixelRatio / baseDpr;
+            return Math.abs(z - 1) > 0.01 ? z : 1;
+        }
+        function applyZoomLock() {
+            const zoom = getBrowserZoom();
+            if (zoomLockEnabled && Math.abs(zoom - 1.0) > 0.05) {
+                // CSS zoom 补偿，使视觉保持 baseDpr 对应的大小
+                document.documentElement.style.zoom = (1 / zoom).toFixed(4);
+            } else if (!zoomLockEnabled) {
+                document.documentElement.style.zoom = '';
+            }
+        }
+        // 时钟大小：动态计算，填满窗口且不出框
+        // 12 字符在 Courier New 下宽度 ≈ 7.2 × fontSize + letter-spacing
+        // CSS zoom 不会同步缩放 viewport 单位，需补偿浏览器缩放
+        function updateClockSize() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            // 补偿 = 1 / (CSS zoom 缩放系数)
+            // 在锁定时 = 1 / (1/zoom) = zoom
+            const zoomComp = (typeof baseDpr !== 'undefined' && baseDpr > 0)
+                ? window.devicePixelRatio / baseDpr
+                : 1;
+            // 公式：width-constrained × zoomComp，让 CSS 字号在 zoom 后刚好铺满视觉宽度
+            const timeSize = Math.min(
+                (w * zoomComp - 60) / 7.2,
+                (h * zoomComp) / 3.2,
+                400
+            );
+            document.documentElement.style.setProperty('--time-size', timeSize + 'px');
+        }
+        window.addEventListener('resize', () => {
+            updateClockSize();
+            applyZoomLock();
+        });
+        updateClockSize();
+        if (visualViewport) {
+            visualViewport.addEventListener('resize', () => {
+                applyZoomLock();
+            });
+        }
+        applyZoomLock();
+
+        // 浏览器缩放上限 200%
+        (function() {
+            const MAX_ZOOM = 2.0;
+            function getZoom() { return (visualViewport && visualViewport.scale) || 1; }
+
+            // 拦截键盘：Cmd/Ctrl + +/= （放大）
+            document.addEventListener('keydown', (e) => {
+                if (!(e.ctrlKey || e.metaKey)) return;
+                if (e.key === '=' || e.key === '+') {
+                    if (getZoom() >= MAX_ZOOM - 0.01) {
+                        e.preventDefault();
+                    }
+                }
+            });
+
+            // 拦截 Ctrl+wheel 放大
+            document.addEventListener('wheel', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.deltaY < 0) {
+                    if (getZoom() >= MAX_ZOOM - 0.01) {
+                        e.preventDefault();
+                    }
+                }
+            }, { passive: false });
+
+            // 拦截手势缩放（trackpad pinch）
+            document.addEventListener('gesturestart', (e) => {
+                if (e.scale > 1 && getZoom() >= MAX_ZOOM - 0.01) e.preventDefault();
+            }, { passive: false });
+        })();
+
+        // 浏览器缩放检测：>200% 时中央提示
+        function checkZoom() {
+            const zoom = (visualViewport && visualViewport.scale) || 1;
+            const hint = document.getElementById('zoom-hint');
+            if (!hint) return;
+            if (zoom > 2.05) {
+                hint.style.display = 'block';
+                hint.innerHTML = '⚠ 已超过最大缩放 200%<br>当前: ' + Math.round(zoom * 100) + '%<br><small>请按 Cmd+0 重置</small>';
+            } else {
+                hint.style.display = 'none';
+            }
+        }
+        if (visualViewport) {
+            visualViewport.addEventListener('resize', checkZoom);
+        }
+        setInterval(checkZoom, 1000);
+        checkZoom();
+
+        // ========== 配置 ==========
+        const CONFIG_KEY = 'digital_clock_config';
+        const DEFAULT_COLORS = {
+            bg: '#0d0d0d',
+            fg: '#00ffcc',
+            btnBg: '#1a1f26',
+            btnHl: '#00ffcc',
+            btnTxt: '#5a7a8a'
+        };
+
+        // 状态
+        let mode = 0; // 0: ms, 1: 50f, 2: 25f
+        let ntpOffset = 0;
+        let ntpSynced = false;
+        let colors = loadColors();
+
+        // DOM 元素
+        const timeDisplay = document.getElementById('time-display');
+        const ntpStatus = document.getElementById('ntp-status');
+        const modeButtons = document.querySelectorAll('.btn-mode');
+        const settingsWrapper = document.getElementById('settings-wrapper');
+        const settingsPanel = document.getElementById('settings-panel');
+        const overlay = document.getElementById('overlay');
+
+        // 加载颜色配置
+        function loadColors() {
+            try {
+                const saved = localStorage.getItem(CONFIG_KEY);
+                if (saved) {
+                    return JSON.parse(saved);
+                }
+            } catch (e) {}
+            return { ...DEFAULT_COLORS };
+        }
+
+        // 保存颜色配置
+        function saveColors() {
+            try {
+                localStorage.setItem(CONFIG_KEY, JSON.stringify(colors));
+            } catch (e) {}
+        }
+
+        // 应用颜色
+        function applyColors() {
+            document.body.style.backgroundColor = colors.bg;
+            document.body.style.color = colors.fg;
+            timeDisplay.style.color = colors.fg;
+            ntpStatus.style.color = colors.fg;
+
+            modeButtons.forEach((btn, i) => {
+                if (i === mode) {
+                    btn.style.backgroundColor = colors.btnHl;
+                    btn.style.color = colors.bg;
+                } else {
+                    btn.style.backgroundColor = colors.btnBg;
+                    btn.style.color = colors.btnTxt;
+                }
+            });
+
+            document.getElementById('settings-btn').style.backgroundColor = colors.btnBg;
+            document.getElementById('settings-btn').style.color = colors.btnTxt;
+        }
+
+        // 更新设置面板
+        function updateSettingsPanel() {
+            document.getElementById('bg-color').value = colors.bg;
+            document.getElementById('bg-picker').value = colors.bg;
+            document.querySelector('label[for="bg-picker"]').style.background = colors.bg;
+            document.getElementById('fg-color').value = colors.fg;
+            document.getElementById('fg-picker').value = colors.fg;
+            document.querySelector('label[for="fg-picker"]').style.background = colors.fg;
+            document.getElementById('btn-bg-color').value = colors.btnBg;
+            document.getElementById('btn-bg-picker').value = colors.btnBg;
+            document.querySelector('label[for="btn-bg-picker"]').style.background = colors.btnBg;
+            document.getElementById('btn-hl-color').value = colors.btnHl;
+            document.getElementById('btn-hl-picker').value = colors.btnHl;
+            document.querySelector('label[for="btn-hl-picker"]').style.background = colors.btnHl;
+            document.getElementById('btn-txt-color').value = colors.btnTxt;
+            document.getElementById('btn-txt-picker').value = colors.btnTxt;
+            document.querySelector('label[for="btn-txt-picker"]').style.background = colors.btnTxt;
+        }
+
+        // 色块选择器联动：picker 变化 → 更新色块背景和文本框
+        ['bg', 'fg', 'btn-bg', 'btn-hl', 'btn-txt'].forEach(key => {
+            const picker = document.getElementById(key + '-picker');
+            const swatch = document.querySelector('label[for="' + key + '-picker"]');
+            const text = document.getElementById(key === 'btn-bg' ? 'btn-bg-color' : key === 'btn-hl' ? 'btn-hl-color' : key === 'btn-txt' ? 'btn-txt-color' : key + '-color');
+            if (picker && swatch) {
+                picker.addEventListener('input', () => {
+                    swatch.style.background = picker.value;
+                    if (text) text.value = picker.value;
+                });
+            }
+        });
+
+        // NTP 校时（使用支持 CORS 且公开 Date 头的 CDN）
+        async function syncNTP() {
+            const urls = [
+                'https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js',
+                'https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js',
+                'https://unpkg.com/dayjs@1.11.10/dayjs.min.js',
+                'https://api.github.com',
+                'https://www.apple.com',
+                'https://www.taobao.com'
+            ];
+
+            for (const url of urls) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    const t1 = Date.now();
+                    const response = await fetch(url, {
+                        method: 'HEAD',
+                        signal: controller.signal,
+                        cache: 'no-store'
+                    });
+                    const t2 = Date.now();
+
+                    clearTimeout(timeoutId);
+
+                    const dateHeader = response.headers.get('Date');
+                    if (dateHeader) {
+                        const serverTime = new Date(dateHeader).getTime();
+                        if (!isNaN(serverTime)) {
+                            const latency = (t2 - t1) / 2;
+                            const adjustedServerTime = serverTime + latency;
+                            const localTime = Date.now();
+                            ntpOffset = adjustedServerTime - localTime;
+                            ntpSynced = true;
+                            ntpStatus.textContent = `NTP校时成功 偏差: ${(ntpOffset/1000).toFixed(3)}s`;
+                            ntpStatus.style.opacity = '0.4';
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            ntpStatus.textContent = 'NTP校时失败，使用本地时间';
+            ntpStatus.style.opacity = '0.4';
+        }
+
+        // 获取校时后的时间
+        function getAdjustedTime() {
+            return new Date(Date.now() + ntpOffset);
+        }
+
+        // 格式化时间
+        function formatTime() {
+            const now = getAdjustedTime();
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            const s = String(now.getSeconds()).padStart(2, '0');
+            const ms = now.getMilliseconds();
+
+            let lastPart;
+            if (mode === 0) {
+                lastPart = String(ms).padStart(3, '0');
+            } else if (mode === 1) {
+                lastPart = String(Math.floor(ms / 20)).padStart(3, '0');
+            } else {
+                lastPart = String(Math.floor(ms / 40)).padStart(3, '0');
+            }
+
+            return `${h}:${m}:${s}:${lastPart}`;
+        }
+
+        // 更新显示
+        function tick() {
+            timeDisplay.textContent = formatTime();
+            requestAnimationFrame(tick);
+        }
+
+        // 切换模式
+        function switchMode(newMode) {
+            mode = newMode;
+            applyColors();
+        }
+
+        // 打开设置
+        function openSettings() {
+            updateSettingsPanel();
+            settingsWrapper.classList.add('show');
+        }
+
+        // 关闭设置
+        function closeSettings() {
+            settingsWrapper.classList.remove('show');
+        }
+
+        // 应用设置
+        function applySettings() {
+            colors.bg = document.getElementById('bg-color').value;
+            colors.fg = document.getElementById('fg-color').value;
+            colors.btnBg = document.getElementById('btn-bg-color').value;
+            colors.btnHl = document.getElementById('btn-hl-color').value;
+            colors.btnTxt = document.getElementById('btn-txt-color').value;
+            applyColors();
+            saveColors();
+            closeSettings();
+        }
+
+        // 重置设置
+        function resetSettings() {
+            colors = { ...DEFAULT_COLORS };
+            updateSettingsPanel();
+            applyColors();
+            saveColors();
+        }
+
+        // 绑定颜色输入同步
+        function bindColorSync(textId, pickerId) {
+            const textInput = document.getElementById(textId);
+            const pickerInput = document.getElementById(pickerId);
+
+            textInput.addEventListener('input', () => {
+                pickerInput.value = textInput.value;
+            });
+
+            pickerInput.addEventListener('input', () => {
+                textInput.value = pickerInput.value;
+            });
+        }
+
+        // 初始化
+        function init() {
+            // 应用颜色
+            applyColors();
+
+            // 绑定模式按钮
+            modeButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    switchMode(parseInt(btn.dataset.mode));
+                });
+            });
+
+            // 绑定设置按钮
+            document.getElementById('settings-btn').addEventListener('click', openSettings);
+            document.getElementById('apply-btn').addEventListener('click', applySettings);
+            document.getElementById('reset-btn').addEventListener('click', resetSettings);
+            document.getElementById('close-btn').addEventListener('click', closeSettings);
+            overlay.addEventListener('click', closeSettings);
+
+            // 刷新按钮：重置缩放锁定
+            const refreshBtn = document.getElementById('refresh-btn');
+            console.log('Refresh button found:', refreshBtn);
+            refreshBtn.addEventListener('click', (e) => {
+                console.log('Refresh button clicked, event:', e);
+                e.preventDefault();
+                e.stopPropagation();
+                resetTo100();
+            });
+
+            // 绑定颜色输入同步
+            bindColorSync('bg-color', 'bg-picker');
+            bindColorSync('fg-color', 'fg-picker');
+            bindColorSync('btn-bg-color', 'btn-bg-picker');
+            bindColorSync('btn-hl-color', 'btn-hl-picker');
+            bindColorSync('btn-txt-color', 'btn-txt-picker');
+
+            // 键盘快捷键
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeSettings();
+                } else if (e.key === '1') {
+                    switchMode(0);
+                } else if (e.key === '2') {
+                    switchMode(1);
+                } else if (e.key === '3') {
+                    switchMode(2);
+                } else if (e.key === 'c' || e.key === 'C') {
+                    openSettings();
+                } else if (e.key === 'f' || e.key === 'F') {
+                    if (document.fullscreenElement) {
+                        document.exitFullscreen();
+                    } else {
+                        document.documentElement.requestFullscreen();
+                    }
+                } else if (e.key === 'r' || e.key === 'R') {
+                    console.log('R key pressed in init');
+                    resetTo100();
+                } else if (e.key === 'l' || e.key === 'L') {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                    zoomLockEnabled = !zoomLockEnabled;
+                    console.log('L key pressed: zoomLockEnabled =', zoomLockEnabled, 'baseDpr =', baseDpr, 'devicePixelRatio =', window.devicePixelRatio);
+                    // L键只切换锁定状态，不修改baseDpr
+                    // 锁定后，applyZoomLock会根据当前devicePixelRatio/baseDpr计算补偿
+                    applyZoomLock();
+                    const status = document.getElementById('lock-status');
+                    console.log('L key: status element =', status);
+                    if (status) {
+                        if (zoomLockEnabled) {
+                            status.textContent = '🔒 锁定';
+                            status.style.display = 'block';
+                            console.log('L key: showed lock label');
+                        } else {
+                            status.textContent = '';
+                            status.style.display = 'none';
+                            console.log('L key: hid lock label');
+                        }
+                    }
+                } else if (e.key === '0') {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                    baseDpr = window.devicePixelRatio;
+                    applyZoomLock();
+                    console.log('0 key: baseDpr reset to', baseDpr);
+                }
+            });
+
+            // NTP 校时
+            syncNTP();
+            // 每10分钟重新校时
+            setInterval(syncNTP, 600000);
+
+            // 开始计时
+            tick();
+        }
+
+        // 启动
+        init();
+    </script>
+    </div><!-- /zoom-wrapper -->
+</body>
+</html>
